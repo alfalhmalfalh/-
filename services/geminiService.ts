@@ -1,4 +1,4 @@
-import { GoogleGenAI, Modality, Blob as GeminiBlob, GenerateContentResponse, GenerateContentParameters, ThinkingConfig, Tool, GenerateVideoOperation } from "@google/genai";
+import { GoogleGenAI, Modality, Blob as GeminiBlob, GenerateContentResponse, GenerateContentParameters, ThinkingConfig, Tool, GenerateVideosOperation } from "@google/genai";
 import { SupportedModels, AspectRatio, VideoAspectRatio, VideoResolution, GroundingChunk, ImageInput } from '../types';
 import { VEO_BILLING_DOCS_LINK } from '../constants';
 
@@ -76,10 +76,8 @@ export function getGeminiClient(): GoogleGenAI {
     console.error("API_KEY is not defined.");
     throw new Error("Gemini API key is not configured.");
   }
-  // Fix: Addressing "Expected 0 arguments, but got 1" error.
-  // The current library version/environment seems to expect no arguments,
-  // implicitly picking up process.env.API_KEY as per the guideline about API key handling.
-  return new GoogleGenAI();
+  // Corrected: Always use a named parameter for the API key.
+  return new GoogleGenAI({ apiKey: process.env.API_KEY });
 }
 
 // Veo API Key Selection Check
@@ -92,21 +90,7 @@ export async function checkAndSelectVeoApiKey(): Promise<boolean> {
   const hasKey = await window.aistudio.hasSelectedApiKey();
   if (!hasKey) {
     console.warn("Veo API key not selected. Opening key selection dialog.");
-    // Fix: Addressing "Expected 0 arguments, but got 1" error for GoogleGenAI.
-    // The `GoogleGenAI` instance is not needed here; the `openSelectKey` method is called directly on `window.aistudio`.
-    // The previous error was a misleading linting/compiler error which isn't directly related to this function body,
-    // but rather the `getGeminiClient` call site. No change required here.
-    await window.aistudio.openSelectKey({
-      title: "Select API Key for Video Generation",
-      message: `
-        <p>To use video generation features, you need to select an API key with billing enabled.</p>
-        <p>This ensures you can access the powerful Veo models. Make sure your project has billing set up.</p>
-        <p>For more information on billing, please visit our <a href="${VEO_BILLING_DOCS_LINK}" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:underline">billing documentation</a>.</p>
-        <p>After selecting your key, please retry the video generation.</p>
-      `,
-      confirmButtonText: "Select Key",
-      cancelButtonText: "Cancel",
-    });
+    await window.aistudio.openSelectKey();
     // Assume success after opening the dialog for the current operation attempt,
     // as the race condition suggests it might not be immediately true.
     return true;
@@ -132,16 +116,7 @@ export const handleApiError = (error: any): string => {
     errorMessage += " This might indicate an issue with your selected API key. Please try selecting it again.";
     if (typeof window !== 'undefined' && window.aistudio && window.aistudio.openSelectKey) {
       // Re-prompt key selection if this specific error occurs
-      window.aistudio.openSelectKey({
-        title: "API Key Error: Re-select Key",
-        message: `
-          <p>It seems there was an issue using the selected API key. This often happens if the key is invalid, revoked, or billing is not enabled for the associated project.</p>
-          <p>Please select your API key again to ensure it's properly configured for video generation.</p>
-          <p>For more information on billing, please visit our <a href="${VEO_BILLING_DOCS_LINK}" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:underline">billing documentation</a>.</p>
-        `,
-        confirmButtonText: "Select Key",
-        cancelButtonText: "Cancel",
-      }).catch(e => console.error("Error opening key selection dialog:", e));
+      window.aistudio.openSelectKey().catch(e => console.error("Error opening key selection dialog:", e));
     }
   }
 
@@ -153,10 +128,26 @@ export function extractGroundingChunks(response: GenerateContentResponse): Groun
   const groundingChunks: GroundingChunk[] = [];
   if (response.candidates?.[0]?.groundingMetadata?.groundingChunks) {
     for (const chunk of response.candidates[0].groundingMetadata.groundingChunks) {
-      if (chunk.web) {
+      // Ensure uri and title exist before adding to array to match GroundingChunk type
+      if (chunk.web && chunk.web.uri && chunk.web.title) {
         groundingChunks.push({ web: chunk.web });
-      } else if (chunk.maps) {
-        groundingChunks.push({ maps: chunk.maps });
+      } else if (chunk.maps && chunk.maps.uri && chunk.maps.title) {
+        // Fix: Explicitly construct the maps object to match the GroundingChunk type,
+        // casting `snippet` to its expected type based on the guidelines, as the SDK's internal type
+        // `GroundingChunkMapsPlaceAnswerSourcesReviewSnippet` may be more generic or different.
+        const mapsData: GroundingChunk['maps'] = {
+          uri: chunk.maps.uri,
+          title: chunk.maps.title,
+        };
+        if (chunk.maps.placeAnswerSources?.reviewSnippets) {
+          mapsData.placeAnswerSources = {
+            reviewSnippets: chunk.maps.placeAnswerSources.reviewSnippets.map(snippet => ({
+              reviewSnippet: (snippet as { reviewSnippet: string; uri: string }).reviewSnippet,
+              uri: (snippet as { reviewSnippet: string; uri: string }).uri,
+            })),
+          };
+        }
+        groundingChunks.push({ maps: mapsData });
       }
     }
   }
@@ -213,7 +204,7 @@ export async function generateContent(
 
   return await ai.models.generateContent({
     model: model,
-    contents: { parts: parts },
+    contents: parts, // Pass the array of parts directly
     config: generateConfig,
   });
 }

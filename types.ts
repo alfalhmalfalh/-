@@ -1,4 +1,4 @@
-import { Modality, FunctionDeclaration } from "@google/genai";
+import { Modality, FunctionDeclaration, Session } from "@google/genai";
 
 export type SupportedModels =
   | 'gemini-2.5-flash'
@@ -36,12 +36,12 @@ export type VideoResolution = '720p' | '1080p';
 
 export interface GroundingChunk {
   web?: {
-    uri: string;
-    title: string;
+    uri?: string; // Made optional to match potential SDK response
+    title?: string; // Made optional to match potential SDK response
   };
   maps?: {
-    uri: string;
-    title: string;
+    uri?: string; // Made optional to match potential SDK response
+    title?: string; // Made optional to match potential SDK response
     placeAnswerSources?: {
       reviewSnippets?: {
         reviewSnippet: string;
@@ -59,6 +59,7 @@ export interface ImageInput {
 export type GeminiAPICallback = (response: any) => void;
 
 // Audio decoding utilities
+// These are declarations; implementations are in services/geminiService.ts
 export declare function decode(base64: string): Uint8Array;
 export declare function decodeAudioData(
   data: Uint8Array,
@@ -71,3 +72,6 @@ export declare function encode(bytes: Uint8Array): string;
 export interface ToolFunctionDeclaration {
   functionDeclarations: FunctionDeclaration[];
 }
+
+// Added Session type for live chat
+export { Session };

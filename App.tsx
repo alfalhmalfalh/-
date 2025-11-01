@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useReducer } from 'react';
-import { GoogleGenAI, Modality, LiveServerMessage, Chat, Tool, Type, GenerateVideoOperation } from '@google/genai';
+import { GoogleGenAI, Modality, LiveServerMessage, Chat, Tool, Type, GenerateVideosOperation, Session } from '@google/genai';
 import { fileToBase64, createPcmBlob, decode, decodeAudioData, getGeminiClient, checkAndSelectVeoApiKey, handleApiError, extractGroundingChunks, generateContent } from './services/geminiService';
 import {
   ALL_TABS,
@@ -98,7 +98,8 @@ const App: React.FC = () => {
   const [liveChatOutputTranscription, setLiveChatOutputTranscription] = useState<string>('');
   const [liveChatHistory, setLiveChatHistory] = useState<string[]>([]);
   const [isLiveChatActive, setIsLiveChatActive] = useState<boolean>(false);
-  const liveSessionPromise = useRef<Promise<ReturnType<GoogleGenAI['live']['connect']>> | null>(null);
+  // Corrected: `live.connect` returns `Promise<Session>`, so useRef should be `Promise<Session>`
+  const liveSessionPromise = useRef<Promise<Session> | null>(null);
   const nextStartTime = useRef<number>(0);
   const outputAudioSources = useRef<Set<AudioBufferSourceNode>>(new Set());
   const inputAudioContext = useRef<AudioContext | null>(null);
@@ -164,7 +165,8 @@ const App: React.FC = () => {
     setLiveChatHistory([]);
     setIsLiveChatActive(false);
     if (liveSessionPromise.current) {
-      liveSessionPromise.current.then(session => session.close()).catch(console.error);
+      // Corrected: Access 'close' method on the resolved Session object, not the Promise itself.
+      liveSessionPromise.current.then((session: Session) => session.close()).catch(console.error);
       liveSessionPromise.current = null;
     }
     if (inputAudioContext.current) inputAudioContext.current.close();
@@ -197,9 +199,10 @@ const App: React.FC = () => {
     dispatch({ type: 'SET_ERROR', payload: null });
     setTextResponse('');
 
-    const promptParts = [
-      { text: textPrompt },
-    ];
+    // promptParts is not directly used in generateContent helper as it constructs parts internally
+    // const promptParts = [
+    //   { text: textPrompt },
+    // ];
 
     const config: Parameters<typeof generateContent>[2] = {
       systemInstruction: systemInstruction,
@@ -262,19 +265,21 @@ const App: React.FC = () => {
       const ai = getGeminiClient();
       const response = await ai.models.generateContent({
         model: GEMINI_FLASH_IMAGE_MODEL,
-        contents: {
-          parts: [
-            {
-              inlineData: {
-                data: imageToEditInput.base64Data,
-                mimeType: imageToEditInput.mimeType,
+        contents: [ // Changed to array of Content objects for consistency
+          {
+            parts: [
+              {
+                inlineData: {
+                  data: imageToEditInput.base64Data,
+                  mimeType: imageToEditInput.mimeType,
+                },
               },
-            },
-            {
-              text: imageEditPrompt,
-            },
-          ],
-        },
+              {
+                text: imageEditPrompt,
+              },
+            ],
+          },
+        ],
         config: {
           responseModalities: [Modality.IMAGE],
         },
@@ -340,7 +345,7 @@ const App: React.FC = () => {
       }
 
 
-      let currentOperation: GenerateVideoOperation = operation;
+      let currentOperation: GenerateVideosOperation = operation;
       dispatch({ type: 'SET_LOADING', payload: true });
       dispatch({ type: 'SET_ERROR', payload: 'Generating video... This may take a few minutes.' });
 
@@ -354,11 +359,9 @@ const App: React.FC = () => {
 
       const downloadLink = currentOperation.response?.generatedVideos?.[0]?.video?.uri;
       if (downloadLink) {
-        // Fix: Use getGeminiClient() to get the API key to append to the download link.
-        // It's crucial that any API calls that rely on process.env.API_KEY or external
-        // key selection use the current, valid key.
-        const aiWithKey = getGeminiClient();
-        const videoResponse = await fetch(`${downloadLink}&key=${aiWithKey.apiKey}`);
+        // Fix: Use process.env.API_KEY directly as it's the source for initialization.
+        // `aiWithKey.apiKey` is private.
+        const videoResponse = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
         if (!videoResponse.ok) {
           throw new Error(`Failed to fetch video: ${videoResponse.statusText}`);
         }
@@ -484,9 +487,9 @@ const App: React.FC = () => {
     try {
       const ai = getGeminiClient();
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      // Fix: Replace window.webkitAudioContext with AudioContext.
+      // Corrected: Use standard AudioContext instead of window.webkitAudioContext
       inputAudioContext.current = new AudioContext({ sampleRate: 16000 });
-      // Fix: Replace window.webkitAudioContext with AudioContext.
+      // Corrected: Use standard AudioContext instead of window.webkitAudioContext
       outputAudioContext.current = new AudioContext({ sampleRate: 24000 });
       const inputNode = inputAudioContext.current.createGain(); // Not directly used, but good practice
       const outputNode = outputAudioContext.current.createGain();
@@ -507,7 +510,8 @@ const App: React.FC = () => {
             scriptProcessorNode.current.onaudioprocess = (audioProcessingEvent) => {
               const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
               const pcmBlob = createPcmBlob(inputData, inputAudioContext.current!.sampleRate);
-              liveSessionPromise.current!.then((session) => { // CRITICAL: Solely rely on sessionPromise resolves
+              // CRITICAL: Solely rely on sessionPromise resolves and explicitly type session
+              liveSessionPromise.current!.then((session: Session) => { 
                 session.sendRealtimeInput({ media: pcmBlob });
               });
             };
@@ -522,11 +526,16 @@ const App: React.FC = () => {
             if (message.serverContent?.inputTranscription) {
               setLiveChatInputTranscription((prev) => prev + message.serverContent!.inputTranscription!.text);
             }
+            // IMPORTANT: Capture current transcription state before clearing
             if (message.serverContent?.turnComplete) {
+              const currentInput = liveChatInputTranscription;
+              const currentOutput = liveChatOutputTranscription;
+              // Fix: Explicitly cast currentInput and currentOutput to string to satisfy the compiler.
+              // This addresses a potential type inference issue within the asynchronous callback.
               setLiveChatHistory((prev) => [
                 ...prev,
-                liveChatInputTranscription, // Use the current state of transcription
-                liveChatOutputTranscription,
+                currentInput as string, 
+                currentOutput as string,
               ]);
               setLiveChatInputTranscription('');
               setLiveChatOutputTranscription('');
@@ -609,7 +618,8 @@ const App: React.FC = () => {
 
   const stopLiveChat = useCallback(() => {
     if (liveSessionPromise.current) {
-      liveSessionPromise.current.then(session => session.close()).catch(console.error);
+      // Corrected: Access 'close' method on the resolved Session object, not the Promise itself.
+      liveSessionPromise.current.then((session: Session) => session.close()).catch(console.error);
       liveSessionPromise.current = null;
     }
     setIsLiveChatActive(false);
@@ -645,12 +655,30 @@ const App: React.FC = () => {
 
       const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
       if (base64Audio) {
-        const audioBlob = new Blob([decode(base64Audio)], { type: 'audio/pcm' });
-        const url = URL.createObjectURL(audioBlob);
-        if (audioRef.current) {
-          audioRef.current.src = url;
-          audioRef.current.play().catch(e => console.error("Audio playback error:", e));
+        // The audio bytes returned by the API is raw PCM data. It is not a standard file format like `.wav` `.mpeg`, or `.mp3`, it contains no header information.
+        // It should be decoded using AudioContext.
+        if (outputAudioContext.current === null) {
+          outputAudioContext.current = new AudioContext({ sampleRate: 24000 });
         }
+        const audioBuffer = await decodeAudioData(
+          decode(base64Audio),
+          outputAudioContext.current,
+          24000,
+          1,
+        );
+        const source = outputAudioContext.current.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(outputAudioContext.current.destination); // Connect to default destination (speakers)
+        source.start();
+        
+        // This part is for `audioRef` which expects a file URL, but Gemini TTS returns raw PCM.
+        // Keeping it commented out or removed unless a proper way to stream raw PCM to an <audio> tag is implemented.
+        // const audioBlob = new Blob([decode(base64Audio)], { type: 'audio/pcm' });
+        // const url = URL.createObjectURL(audioBlob);
+        // if (audioRef.current) {
+        //   audioRef.current.src = url;
+        //   audioRef.current.play().catch(e => console.error("Audio playback error:", e));
+        // }
       } else {
         dispatch({ type: 'SET_ERROR', payload: 'No audio data received.' });
       }
@@ -1262,12 +1290,12 @@ const App: React.FC = () => {
                       <ul className="list-disc pl-5 space-y-1">
                         {groundingLinks.map((chunk, index) => (
                           <li key={index}>
-                            {chunk.web && (
+                            {chunk.web && chunk.web.uri && ( // Ensure uri exists before rendering link
                               <a href={chunk.web.uri} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">
                                 {chunk.web.title || chunk.web.uri}
                               </a>
                             )}
-                            {chunk.maps && (
+                            {chunk.maps && chunk.maps.uri && ( // Ensure uri exists before rendering link
                               <div>
                                 <a href={chunk.maps.uri} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">
                                   {chunk.maps.title || chunk.maps.uri}
