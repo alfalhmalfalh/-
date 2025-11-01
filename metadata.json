@@ -1,0 +1,9 @@
+{
+  "name": "Copy of Gemini Multi-Tool App",
+  "description": "A powerful multi-modal AI application leveraging Gemini API capabilities for text, image, audio, and video generation and analysis, featuring live conversation, grounding, and more.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
